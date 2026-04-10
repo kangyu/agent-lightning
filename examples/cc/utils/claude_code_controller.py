@@ -29,13 +29,32 @@ class ClaudeController:
         return
 
     def init_container(self, image: str, instance: dict) -> Runtime:
+        import io
+        import os
+        import tarfile
+
         container = Runtime.start_session(
             image,
             instance,
             log_function=partial(logger, run_id=self.run_id, instance_id=instance["instance_id"]),
             platform="linux",
         )
-        container.send_command("curl -fsSL https://claude.ai/install.sh | bash -s -- 2.0.65")
+
+        # Prefer injecting pre-installed claude from the host via Docker SDK put_archive.
+        # This avoids per-container downloads and 429 rate limits from claude.ai/install.sh.
+        # Resolves symlink to get the actual ELF binary path.
+        host_claude = os.path.realpath(os.path.expanduser("~/.local/bin/claude"))
+        if os.path.isfile(host_claude):
+            container.send_command("mkdir -p /root/.local/bin")
+            buf = io.BytesIO()
+            with tarfile.open(fileobj=buf, mode="w") as tar:
+                tar.add(host_claude, arcname="claude")
+            buf.seek(0)
+            container.container.put_archive("/root/.local/bin/", buf)
+            container.send_command("chmod +x /root/.local/bin/claude")
+        else:
+            container.send_command("curl -fsSL https://claude.ai/install.sh | bash -s -- 2.0.65")
+
         container.send_command('alias claude="$HOME/.local/bin/claude"')
         dotenv.load_dotenv()
         # anthropic_api_key = os.getenv('ANTHROPIC_API_KEY')
