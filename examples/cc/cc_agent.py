@@ -7,6 +7,14 @@ from typing import Any, Dict, List, Literal, Optional
 
 import yaml
 
+try:
+    import docker as _docker_module
+except ImportError:
+    _docker_module = None  # type: ignore
+
+_DOCKER_MAX_RETRIES = 3
+_DOCKER_RETRY_DELAY = 30  # seconds between retries
+
 if platform.system() == "Linux":
     import resource
 
@@ -97,25 +105,40 @@ class CodingAgent(LitAgent):
 
         llm = self._strip_proxy_helper(llm, rollout)
 
-        try:
-            # 1. init container
-            controller = ClaudeController(
-                image,
-                task,
-                run_id,
-                set(self.tools),
-                self.user_prompt,
-                llm.endpoint,
-                llm.api_key or os.environ.get("ANTHROPIC_AUTH_TOKEN", "dummy"),
-            )
-            # 2. execute task
-            prediction: AgentResult = controller.run_instance(task, max_step=self.max_step, run_method=self.run_method)
-            logger(run_id, task["instance_id"], json.dumps(prediction, indent=4))
-            # Under development: Intermediate Reward
-            # intermediate_reward_list: list[tuple[ClaudeCodeStep, float]] = controller.calculate_intermediate_rewards_per_slice(task["patch"],  prediction["model_patch"], prediction["reproduction_file"], prediction["trajectory"])
-            del controller
-        except Exception as e:
-            logger(run_id, task["instance_id"], f"Exception during rollout: {e}")
+        prediction: Optional[AgentResult] = None
+        for _attempt in range(_DOCKER_MAX_RETRIES):
+            try:
+                # 1. init container
+                controller = ClaudeController(
+                    image,
+                    task,
+                    run_id,
+                    set(self.tools),
+                    self.user_prompt,
+                    llm.endpoint,
+                    llm.api_key or os.environ.get("ANTHROPIC_AUTH_TOKEN", "dummy"),
+                )
+                # 2. execute task
+                prediction = controller.run_instance(task, max_step=self.max_step, run_method=self.run_method)
+                logger(run_id, task["instance_id"], json.dumps(prediction, indent=4))
+                del controller
+                break
+            except Exception as e:
+                _is_docker_err = (
+                    _docker_module is not None
+                    and isinstance(e, _docker_module.errors.DockerException)
+                )
+                logger(
+                    run_id, task["instance_id"],
+                    f"{'Docker error' if _is_docker_err else 'Exception'} "
+                    f"(attempt {_attempt + 1}/{_DOCKER_MAX_RETRIES}): {e}"
+                )
+                if _is_docker_err and _attempt < _DOCKER_MAX_RETRIES - 1:
+                    await asyncio.sleep(_DOCKER_RETRY_DELAY)
+                else:
+                    break
+
+        if prediction is None:
             return reward
 
         # 3. obtain rewards (evaluation result)

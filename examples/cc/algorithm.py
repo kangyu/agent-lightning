@@ -251,12 +251,19 @@ async def build_dataset(
     # Here we do not handle data leakage where training samples are newer than eval set
     random.shuffle(all_triplets)
     split_point = math.ceil(len(all_triplets) * train_triplet_fraction)
-    assert split_point < len(all_triplets) - 1
-    train_triplets = all_triplets[:split_point]
-    eval_triplets = all_triplets[split_point:]
+    if split_point >= len(all_triplets):
+        console.print(
+            f"[bold red][Algo][/bold red] Warning: only {len(all_triplets)} triplets available; "
+            "not enough to split — using all for training, skipping eval split."
+        )
+        train_triplets = all_triplets
+        eval_triplets: List[Dict[str, Any]] = []
+    else:
+        train_triplets = all_triplets[:split_point]
+        eval_triplets = all_triplets[split_point:]
 
     train_dataset = Dataset.from_list(train_triplets)  # type: ignore
-    eval_dataset = Dataset.from_list(eval_triplets) if eval_triplets is not None else None  # type: ignore
+    eval_dataset = Dataset.from_list(eval_triplets) if eval_triplets else None  # type: ignore
     console.print(
         f"[bold red][Algo][/bold red] Generated {len(all_triplets)} triplets for SFT training. "
         f"Keeping {len(train_triplets)} for training."
