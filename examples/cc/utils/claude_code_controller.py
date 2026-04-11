@@ -90,7 +90,8 @@ class ClaudeController:
         # self.container.send_command("chmod +x /tmp/handle_hook.sh")
 
         # run claude reading the prompt from the file to avoid shell interpolation issues
-        claude_cmd = f'claude -p "$(cat /tmp/cc_prompt.txt)" --system-prompt "{self.system_prompt}" --max-turns {max_step}  --output-format json --verbose'
+        # Use full path instead of alias to avoid alias scope issues across send_command calls
+        claude_cmd = f'/root/.local/bin/claude -p "$(cat /tmp/cc_prompt.txt)" --system-prompt "{self.system_prompt}" --max-turns {max_step}  --output-format json --verbose'
         res = self.container.send_command(claude_cmd, timelimit * 60)
         traj = [i for i in res.output.splitlines() if "session_id" in i]
         assert len(traj) > 0, "traj not found!"
